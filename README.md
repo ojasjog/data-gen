@@ -36,7 +36,7 @@ project/
 
 ---
 
-## Asset Naming Requirements for ImangeNet (legacy)
+## Asset Naming Requirements for ImageNet (legacy)
 
 ### Foreground Images
 
