@@ -1,6 +1,9 @@
 # Factory Synthetic Dataset Generator + YOLO Training
 
-A tool for generating synthetic factory datasets for YOLO training. **v2** replaces the ImageNet-based background/foreground compositing approach with **Stable Diffusion 1.5** to generate photorealistic background scenes directly from text prompts, enabling open-ended class coverage beyond ImageNet's ~1,000 categories.
+A two-script toolkit for generating synthetic factory datasets and training YOLO models.
+
+- **v1 (`synth.py`)** — composites real foreground assets onto local background images, then trains YOLOv11
+- **v2 (`synth_sd.py`)** — generates images from scratch using Stable Diffusion 1.5 (standalone image gen, no YOLO training step)
 
 ---
 
@@ -8,13 +11,14 @@ A tool for generating synthetic factory datasets for YOLO training. **v2** repla
 
 | | v1 (`synth.py`) | v2 (`synth_sd.py`) |
 |---|---|---|
-| **Background source** | ImageNet images (scraped/local) | Stable Diffusion 1.5 (generated) |
-| **Class coverage** | ~1,000 ImageNet classes | Unlimited — prompt-driven |
-| **Background variety** | Fixed to available assets | Dynamically generated per run |
-| **GPU requirement** | Optional | Recommended (CUDA); CPU fallback supported |
-| **Key new deps** | — | `diffusers`, `transformers`, `openai-clip` |
-| **Execution script** | `synth.py` | `synth_sd.py` |
-| **Prompt support** | None | `--prompt` flag for scene description |
+| **Background source** | Local `bg_*.jpg/png` asset files | Stable Diffusion 1.5 (text-to-image) |
+| **Class coverage** | Fixed to foreground assets in `factory_assets/` | Unlimited — fully prompt-driven |
+| **Output** | Full YOLO dataset + trains YOLOv11 | Single generated image saved to file |
+| **CLI flags** | `--assets`, `--data` | `--word`, `--output` |
+| **YOLO training** | Built-in (yolo11m.pt, 15 epochs) | Not included |
+| **GPU requirement** | Optional (CUDA used if available) | Required — loads model in `float16` to CUDA |
+| **VRAM** | Minimal | ~4–6 GB (attention slicing enabled for 8 GB cards) |
+| **New dependencies** | — | `diffusers`, `transformers` |
 
 ---
 
@@ -23,44 +27,39 @@ A tool for generating synthetic factory datasets for YOLO training. **v2** repla
 ```
 project/
 │
-├── synth.py              # v1 — ImageNet-based (legacy)
-├── synth_sd.py           # v2 — Stable Diffusion 1.5 (current)
+├── synth.py              # v1 — composite + YOLO train (ImageNet-style)
+├── synth_sd.py           # v2 — Stable Diffusion image generation
 ├── requirements.txt
 │
-└── factory_assets/
-    ├── fg_worker.png
+└── factory_assets/       # used by v1 only
+    ├── bg_factory_1.jpg  # background images (bg_ prefix)
+    ├── bg_factory_2.jpg
+    ├── fg_worker.png     # foreground objects, transparent PNG (fg_ prefix)
     └── fg_forklift.png
 ```
 
-> **Note:** v2 no longer requires pre-collected background images (`bg_*.jpg`). Backgrounds are generated at runtime via SD 1.5. Foreground assets (`fg_*.png`) with transparent backgrounds are still required.
+> `synth_sd.py` does not use `factory_assets/` — all content is generated from the `--word` prompt.
 
 ---
 
-## Asset Naming Requirements for ImageNet (legacy)
+## Asset Naming (v1 only)
 
-### Foreground Images
+### Backgrounds
+Must start with `bg_`, `.jpg` or `.png`:
+```
+bg_factory_1.jpg
+bg_warehouse.png
+```
 
-All foreground images must begin with `fg_` and use transparent-background RGBA PNGs:
-
+### Foregrounds
+Must start with `fg_`, transparent RGBA `.png`:
 ```
 fg_worker.png
 fg_forklift.png
 ```
 
-### Background Images (v1 only)
-
-If using the legacy `synth.py`, background images must begin with `bg_`:
-
-```
-bg_factory_1.jpg
-bg_warehouse.jpg
-```
-
----
-
-## Class Mapping
-
-Update `ASSET_CLASSES` and `CLASS_NAMES` in `synth_sd.py` to match your foreground assets:
+### Class Mapping
+Update `ASSET_CLASSES` and `CLASS_NAMES` in `synth.py` when adding new foreground objects:
 
 ```python
 ASSET_CLASSES = {
@@ -68,17 +67,12 @@ ASSET_CLASSES = {
     "fg_forklift.png": 1,
 }
 
-CLASS_NAMES = [
-    "worker",
-    "forklift"
-]
+CLASS_NAMES = ["worker", "forklift"]
 ```
 
 ---
 
 ## Installation
-
-Create and activate a virtual environment:
 
 ```bash
 python -m venv .venv
@@ -94,17 +88,15 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-Install dependencies:
-
 ```bash
 pip install -r requirements.txt
 ```
 
-> **GPU note:** `torch` and `torchvision` will install CPU-only by default via pip. For CUDA support, install PyTorch separately first:
+> For CUDA-enabled PyTorch (recommended for v2), install it before the rest:
 > ```bash
 > pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+> pip install -r requirements.txt
 > ```
-> Then run `pip install -r requirements.txt`.
 
 ---
 
@@ -118,14 +110,13 @@ Pillow>=10.0.0
 PyYAML>=6.0
 diffusers>=2.6
 transformers>=4.30.0
-openai-clip>=2.0.0
 ```
 
-**v2-specific packages:**
+**v2-specific:**
+- `diffusers` — runs the `StableDiffusionPipeline` (CompVis/stable-diffusion-v1-4)
+- `transformers` — required by Diffusers for the text encoder/tokenizer
 
-- `diffusers` — Hugging Face Diffusers library; runs the SD 1.5 pipeline
-- `transformers` — required by Diffusers for tokenization and model loading
-- `openai-clip` — CLIP model used for image-text alignment scoring / filtering
+> `openai-clip` listed in the repo is not used by either script currently and can be omitted.
 
 ---
 
@@ -133,21 +124,24 @@ openai-clip>=2.0.0
 
 ### v2 — Stable Diffusion (current)
 
+Generates a single image from a text prompt and saves it to a file.
+
 ```bash
-python synth_sd.py \
-    --assets ./factory_assets \
-    --data ./factory_dataset \
-    --prompt "industrial factory floor with concrete walls and overhead lighting"
+python synth_sd.py --word "factory floor with concrete walls" --output scene.png
 ```
 
 **Windows:**
 ```bash
-python synth_sd.py --assets .\factory_assets --data .\factory_dataset --prompt "industrial factory floor"
+python synth_sd.py --word "factory floor with concrete walls" --output scene.png
 ```
 
-On first run, SD 1.5 model weights (~4 GB) will be downloaded automatically from Hugging Face to `~/.cache/huggingface/`.
+On first run, model weights (~4 GB) are downloaded automatically from Hugging Face to `~/.cache/huggingface/`. Requires a CUDA-capable GPU.
 
-### v1 — ImageNet-based (legacy)
+---
+
+### v1 — ImageNet-style composite + YOLO train (legacy)
+
+Generates a full YOLO dataset (100 train / 20 val images) by compositing foreground assets onto local backgrounds, then immediately kicks off YOLOv11 training.
 
 ```bash
 python synth.py \
@@ -155,33 +149,38 @@ python synth.py \
     --data ./factory_dataset
 ```
 
+**Windows:**
+```bash
+python synth.py --assets .\factory_assets --data .\factory_dataset
+```
+
 ---
 
-## Generated Output
+## Generated Output (v1)
 
 ```
 factory_dataset/
-│
 ├── images/
-│   ├── train/
-│   └── val/
-│
+│   ├── train/      # 100 composite images
+│   └── val/        # 20 composite images
 └── labels/
-    ├── train/
+    ├── train/      # YOLO-format .txt label files
     └── val/
 
-dataset.yaml
+dataset.yaml        # written one level above --data
 
 runs/
-└── factory_run/
+└── factory_run/    # YOLOv11 training output
 ```
 
 ---
 
 ## Troubleshooting
 
-**Out of VRAM during generation:** SD 1.5 requires ~4–6 GB VRAM. Add `--half` flag if supported, or the script will fall back to CPU (slow but functional).
+**`synth_sd.py` crashes on startup:** The script calls `pipe.to("cuda")` unconditionally. A CUDA GPU is required; there is no CPU fallback in v2.
 
-**Model download fails:** Ensure you have internet access on first run. Weights are cached after the initial download.
+**Out of VRAM:** `enable_attention_slicing()` is already applied, targeting 8 GB cards. If you still run out, reduce inference steps or switch to a smaller SD variant.
 
-**`openai-clip` import error:** Try `pip install git+https://github.com/openai/CLIP.git` if the PyPI package conflicts with your environment.
+**`dataset.yaml` written to wrong location:** v1 writes the YAML to `../dataset.yaml` (one directory above `--data`). Make sure the parent directory exists or adjust the path in `synth.py`.
+
+**No backgrounds found (v1):** Ensure background files in `factory_assets/` are named with the `bg_` prefix and are `.jpg` or `.png`.
