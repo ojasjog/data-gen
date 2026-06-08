@@ -3,3 +3,6 @@ torch>=2.0.0
 torchvision>=0.15.0
 Pillow>=10.0.0
 PyYAML>=6.0
+diffusers>=2.6
+transformers >=4.30.0
+openai-clip >=2.0.0
